@@ -1,0 +1,35 @@
+name: Bouw APK's
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-34 build-tools;34.0.0
+      - name: Launcher bouwen
+        working-directory: launcher
+        run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
+      - name: Weer-app bouwen
+        working-directory: addons/weather
+        run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
+      - name: APK's verzamelen
+        run: |
+          mkdir out
+          cp launcher/app/build/outputs/apk/release/app-release.apk out/launcher.apk
+          cp addons/weather/app/build/outputs/apk/release/app-release.apk out/weather.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: out/
