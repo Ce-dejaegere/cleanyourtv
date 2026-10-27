@@ -1,0 +1,84 @@
+name: Bouw APK's met beweging
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-34 build-tools;34.0.0
+      - name: Bewegende achtergrond toevoegen
+        run: |
+          cat > /tmp/patch.py <<'PYEOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          def rep(old, new):
+              global s
+              assert s.count(old) == 1, old
+              s = s.replace(old, new)
+          rep("    void start() {\n        active = true;\n", "    void start() {\n        active = true;\n        startDrift();\n")
+          rep("    void stop() {\n        active = false;\n", "    void stop() {\n        active = false;\n        stopDrift();\n")
+          rep("        image.setImageBitmap(bitmap);\n        if (old != null && old != bitmap) image.postDelayed(old::recycle, 500);\n",
+              "        image.setImageBitmap(bitmap);\n        if (old != null && old != bitmap) {\n            image.setAlpha(0f);\n            image.animate().alpha(1f).setDuration(2500).start();\n        }\n        if (old != null && old != bitmap) image.postDelayed(old::recycle, 500);\n")
+          rep("    private boolean active;\n", """    private boolean active;
+              private android.animation.AnimatorSet drift;
+
+              /** Slow, endless drift of the wallpaper: a gentle zoom and sideways glide, like a living picture. */
+              private void startDrift() {
+                  if (drift != null || image.getParent() == null) return;
+                  image.setPivotX(width / 2f);
+                  image.setPivotY(height / 2f);
+                  android.animation.ObjectAnimator sx = android.animation.ObjectAnimator.ofFloat(image, View.SCALE_X, 1.06f, 1.16f);
+                  android.animation.ObjectAnimator sy = android.animation.ObjectAnimator.ofFloat(image, View.SCALE_Y, 1.06f, 1.16f);
+                  android.animation.ObjectAnimator tx = android.animation.ObjectAnimator.ofFloat(image, View.TRANSLATION_X, -width * 0.04f, width * 0.04f);
+                  android.animation.ObjectAnimator ty = android.animation.ObjectAnimator.ofFloat(image, View.TRANSLATION_Y, height * 0.02f, -height * 0.02f);
+                  long[] durations = {50_000L, 50_000L, 70_000L, 90_000L};
+                  android.animation.ObjectAnimator[] all = {sx, sy, tx, ty};
+                  for (int i = 0; i < all.length; i++) {
+                      all[i].setDuration(durations[i]);
+                      all[i].setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                      all[i].setRepeatMode(android.animation.ValueAnimator.REVERSE);
+                      all[i].setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+                  }
+                  drift = new android.animation.AnimatorSet();
+                  drift.playTogether(sx, sy, tx, ty);
+                  drift.start();
+              }
+
+              private void stopDrift() {
+                  if (drift == null) return;
+                  drift.cancel();
+                  drift = null;
+              }
+          """)
+          open(p, "w", encoding="utf-8").write(s)
+          print("beweging toegevoegd")
+          PYEOF
+          python3 /tmp/patch.py launcher/app/src/main/java/com/gathin/tvhome/WallpaperPlayer.java
+      - name: Launcher bouwen
+        working-directory: launcher
+        run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
+      - name: Weer-app bouwen
+        working-directory: addons/weather
+        run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
+      - name: APK's verzamelen
+        run: |
+          mkdir out
+          cp launcher/app/build/outputs/apk/release/app-release.apk out/launcher.apk
+          cp addons/weather/app/build/outputs/apk/release/app-release.apk out/weather.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apks-beweging
+          path: out/
