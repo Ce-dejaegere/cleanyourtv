@@ -1,0 +1,214 @@
+name: Bouw launcher met video
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-34 build-tools;34.0.0
+      - name: Video-achtergrond en beweging toevoegen
+        run: |
+          cat > /tmp/patch_video.py <<'PYEOF'
+          import sys
+          root = sys.argv[1]
+          wp = root + "/WallpaperPlayer.java"
+          tf = root + "/ThemeFiles.java"
+          s = open(wp, encoding="utf-8").read()
+          def rep(old, new):
+              global s
+              assert s.count(old) == 1, old
+              s = s.replace(old, new)
+
+          # 1. start/stop drive the drift (pictures) and the video
+          rep("    void start() {\n        active = true;\n", "    void start() {\n        active = true;\n        startDrift();\n        resumeVideo();\n")
+          rep("    void stop() {\n        active = false;\n", "    void stop() {\n        active = false;\n        stopDrift();\n        pauseVideo();\n")
+          rep("    void close() {\n        active = false;\n        closed = true;\n", "    void close() {\n        active = false;\n        closed = true;\n        releaseVideo();\n")
+          # 2. soft crossfade between pictures
+          rep("        image.setImageBitmap(bitmap);\n        if (old != null && old != bitmap) image.postDelayed(old::recycle, 500);\n",
+              "        image.setImageBitmap(bitmap);\n        if (old != null && old != bitmap) {\n            image.setAlpha(0f);\n            image.animate().alpha(1f).setDuration(2500).start();\n        }\n        if (old != null && old != bitmap) image.postDelayed(old::recycle, 500);\n")
+          # 3. a theme's wallpaper.mp4 replaces the pictures
+          rep("        if (config.wallpaperEnabled && !files.isEmpty()) {\n",
+              "        File themeDir = Config.dir(context);\n"
+              "        File clipFile = themeDir == null ? null : new File(themeDir, \"wallpaper.mp4\");\n"
+              "        videoAlpha = 1f - Math.min(90, Math.max(0, config.wallpaperDim)) / 100f;\n"
+              "        if (config.wallpaperEnabled && clipFile != null && clipFile.isFile() && clipFile.length() > 0) {\n"
+              "            files.clear();\n"
+              "            setUpVideo(context, clipFile);\n"
+              "        }\n"
+              "        if (config.wallpaperEnabled && !files.isEmpty()) {\n")
+          rep("    private boolean active;\n", """    private boolean active;
+              private android.animation.AnimatorSet drift;
+              private android.view.TextureView video;
+              private android.media.MediaPlayer player;
+              private android.view.Surface surface;
+              private File clip;
+              private boolean prepared;
+              private int videoWidth, videoHeight;
+              private float videoAlpha = 1f;
+
+              /** Slow, endless drift of a still wallpaper: a gentle zoom and sideways glide. */
+              private void startDrift() {
+                  if (drift != null || image.getParent() == null) return;
+                  image.setPivotX(width / 2f);
+                  image.setPivotY(height / 2f);
+                  android.animation.ObjectAnimator sx = android.animation.ObjectAnimator.ofFloat(image, View.SCALE_X, 1.06f, 1.20f);
+                  android.animation.ObjectAnimator sy = android.animation.ObjectAnimator.ofFloat(image, View.SCALE_Y, 1.06f, 1.20f);
+                  android.animation.ObjectAnimator tx = android.animation.ObjectAnimator.ofFloat(image, View.TRANSLATION_X, -width * 0.06f, width * 0.06f);
+                  android.animation.ObjectAnimator ty = android.animation.ObjectAnimator.ofFloat(image, View.TRANSLATION_Y, height * 0.03f, -height * 0.03f);
+                  long[] durations = {30_000L, 30_000L, 40_000L, 55_000L};
+                  android.animation.ObjectAnimator[] all = {sx, sy, tx, ty};
+                  for (int i = 0; i < all.length; i++) {
+                      all[i].setDuration(durations[i]);
+                      all[i].setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                      all[i].setRepeatMode(android.animation.ValueAnimator.REVERSE);
+                      all[i].setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+                  }
+                  drift = new android.animation.AnimatorSet();
+                  drift.playTogether(sx, sy, tx, ty);
+                  drift.start();
+              }
+
+              private void stopDrift() {
+                  if (drift == null) return;
+                  drift.cancel();
+                  drift = null;
+              }
+
+              /** A looping, muted video behind Home: the theme's wallpaper.mp4. */
+              private void setUpVideo(Context context, File file) {
+                  clip = file;
+                  video = new android.view.TextureView(context);
+                  video.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+                  video.setAlpha(videoAlpha);
+                  root.setBackgroundColor(0xFF000000);
+                  root.addView(video, 0, new FrameLayout.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                  video.setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+                      @Override
+                      public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
+                          if (active && !closed) openVideo(st);
+                      }
+
+                      @Override
+                      public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) {
+                          fitVideo();
+                      }
+
+                      @Override
+                      public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture st) {
+                          releaseVideo();
+                          return true;
+                      }
+
+                      @Override
+                      public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture st) {
+                      }
+                  });
+              }
+
+              private void openVideo(android.graphics.SurfaceTexture st) {
+                  releaseVideo();
+                  try {
+                      surface = new android.view.Surface(st);
+                      android.media.MediaPlayer mp = new android.media.MediaPlayer();
+                      player = mp;
+                      mp.setDataSource(clip.getPath());
+                      mp.setSurface(surface);
+                      mp.setLooping(true);
+                      mp.setVolume(0f, 0f);
+                      mp.setOnVideoSizeChangedListener((p, w, h) -> {
+                          videoWidth = w;
+                          videoHeight = h;
+                          fitVideo();
+                      });
+                      mp.setOnPreparedListener(p -> {
+                          if (p != player) return;
+                          prepared = true;
+                          if (active && !closed) p.start();
+                      });
+                      mp.setOnErrorListener((p, what, extra) -> {
+                          Log.w("TvHome.Wallpaper", "Video error " + what + "/" + extra);
+                          return true;
+                      });
+                      mp.prepareAsync();
+                  } catch (Exception e) {
+                      Log.w("TvHome.Wallpaper", "Video failed", e);
+                      releaseVideo();
+                  }
+              }
+
+              private void resumeVideo() {
+                  if (video == null || closed) return;
+                  if (player == null) {
+                      if (video.isAvailable()) openVideo(video.getSurfaceTexture());
+                      return;
+                  }
+                  if (prepared && !player.isPlaying()) player.start();
+              }
+
+              private void pauseVideo() {
+                  if (player != null && prepared && player.isPlaying()) player.pause();
+              }
+
+              private void releaseVideo() {
+                  prepared = false;
+                  if (player != null) {
+                      try {
+                          player.release();
+                      } catch (Exception ignored) {
+                          // already gone
+                      }
+                      player = null;
+                  }
+                  if (surface != null) {
+                      surface.release();
+                      surface = null;
+                  }
+              }
+
+              /** Centre-crop the clip to fill the screen. */
+              private void fitVideo() {
+                  if (video == null || videoWidth == 0 || videoHeight == 0) return;
+                  float viewW = video.getWidth(), viewH = video.getHeight();
+                  if (viewW == 0 || viewH == 0) return;
+                  float scale = Math.max(viewW / videoWidth, viewH / videoHeight);
+                  android.graphics.Matrix m = new android.graphics.Matrix();
+                  m.setScale(videoWidth * scale / viewW, videoHeight * scale / viewH, viewW / 2f, viewH / 2f);
+                  video.setTransform(m);
+              }
+          """)
+          # memory pressure: a video is released and reopened on the next start()
+          rep("    void releaseForMemoryPressure() {\n", "    void releaseForMemoryPressure() {\n        if (video != null) {\n            releaseVideo();\n            return;\n        }\n")
+          open(wp, "w", encoding="utf-8").write(s)
+
+          t = open(tf, encoding="utf-8").read()
+          old = '"theme_revision".equals(name)'
+          assert t.count(old) == 1
+          t = t.replace(old, '"theme_revision".equals(name) || "wallpaper.mp4".equals(name)')
+          open(tf, "w", encoding="utf-8").write(t)
+          print("video-achtergrond toegevoegd")
+          PYEOF
+          python3 /tmp/patch_video.py launcher/app/src/main/java/com/gathin/tvhome
+      - name: Launcher bouwen
+        working-directory: launcher
+        run: chmod +x gradlew && ./gradlew --no-daemon assembleRelease
+      - name: APK verzamelen
+        run: |
+          mkdir out
+          cp launcher/app/build/outputs/apk/release/app-release.apk out/launcher.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-video
+          path: out/
