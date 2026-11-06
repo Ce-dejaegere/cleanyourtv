@@ -1,0 +1,61 @@
+name: Bouw alles v3
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-34 build-tools;34.0.0
+      - name: Vaste handtekening
+        env:
+          KS: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          test -n "$KS" || { echo "Het geheim DEBUG_KEYSTORE ontbreekt"; exit 1; }
+          mkdir -p ~/.android
+          echo "$KS" | base64 -d > ~/.android/debug.keystore
+      - name: Aanpassingen uitpakken
+        run: |
+          grep -o 'echo "[A-Za-z0-9+/=]\{200,\}"' .github/workflows/bouw-v2.yml | sed 's/^echo "//;s/"$//' | base64 -d | tar xJ -C /tmp
+          echo "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" | base64 -d | xz -d | patch -d /tmp/extra -p1
+          python3 /tmp/extra/patch_video.py launcher/app/src/main/java/com/gathin/tvhome
+          python3 /tmp/extra/patch_extra.py launcher/app/src/main /tmp/extra/WeatherPill.java
+          cp -r addons/weather addons/lampen
+          rm -rf addons/lampen/app addons/lampen/README.md
+          cp -r /tmp/extra/lampen/app addons/lampen/app
+          sed -i 's/rootProject.name = "weather"/rootProject.name = "lampen"/' addons/lampen/settings.gradle
+          git clone -q https://github.com/nayuki/QR-Code-generator /tmp/qr
+          git -C /tmp/qr checkout -q bcfe1b018cec5f1f91b5705eca5bb4cdd34e9f8d
+          mkdir -p addons/lampen/app/src/main/java/io/nayuki/qrcodegen
+          cp /tmp/qr/java/src/main/java/io/nayuki/qrcodegen/{QrCode,QrSegment,BitBuffer,DataTooLongException}.java addons/lampen/app/src/main/java/io/nayuki/qrcodegen/
+      - name: Launcher bouwen
+        working-directory: launcher
+        run: |
+          for i in 1 2 3; do chmod +x gradlew && ./gradlew --no-daemon assembleRelease && break; echo "opnieuw proberen"; sleep 15; done
+          test -f app/build/outputs/apk/release/app-release.apk
+      - name: Lampen-apps bouwen
+        working-directory: addons/lampen
+        run: |
+          for i in 1 2 3; do chmod +x gradlew && ./gradlew --no-daemon assembleRelease && break; echo "opnieuw proberen"; sleep 15; done
+          find app/build/outputs/apk -name "*.apk"
+      - name: APK's verzamelen
+        run: |
+          mkdir out
+          cp launcher/app/build/outputs/apk/release/app-release.apk out/launcher.apk
+          for f in lampen film uit wifi; do cp addons/lampen/app/build/outputs/apk/$f/release/app-$f-release.apk out/$f.apk; done
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alles-v3
+          path: out/
