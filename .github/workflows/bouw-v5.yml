@@ -1,0 +1,72 @@
+name: Bouw alles v5
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-34 build-tools;34.0.0
+      - name: Vaste handtekening
+        env:
+          KS: ${{ secrets.DEBUG_KEYSTORE }}
+        run: |
+          test -n "$KS" || { echo "Het geheim DEBUG_KEYSTORE ontbreekt"; exit 1; }
+          mkdir -p ~/.android
+          echo "$KS" | base64 -d > ~/.android/debug.keystore
+          cp ~/.android/debug.keystore ~/tv.keystore
+      - name: Aanpassingen uitpakken
+        run: |
+          grep -o 'echo "[A-Za-z0-9+/=]\{200,\}"' .github/workflows/bouw-v2.yml | sed 's/^echo "//;s/"$//' | base64 -d | tar xJ -C /tmp
+          grep -o 'echo "[A-Za-z0-9+/=]\{200,\}"' .github/workflows/bouw-v3.yml | sed 's/^echo "//;s/"$//' | base64 -d | xz -d | patch -d /tmp/extra -p1
+          rm -rf /tmp/extra/lampen/app/src/film /tmp/extra/lampen/app/src/uit /tmp/extra/lampen/app/src/main/java/be/cedric/lampen/QuickActivity.java
+          grep -o 'echo "[A-Za-z0-9+/=]\{200,\}"' .github/workflows/bouw-v4.yml | sed 's/^echo "//;s/"$//' | base64 -d | tar xJ -C /tmp
+          echo "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" | base64 -d | xz -d | patch -d /tmp/extra -p1
+          python3 /tmp/extra/patch_video.py launcher/app/src/main/java/com/gathin/tvhome
+          python3 /tmp/extra/patch_extra.py launcher/app/src/main /tmp/extra/WeatherPill.java
+          cp -r addons/weather addons/lampen
+          rm -rf addons/lampen/app addons/lampen/README.md
+          cp -r /tmp/extra/lampen/app addons/lampen/app
+          sed -i 's/rootProject.name = "weather"/rootProject.name = "lampen"/' addons/lampen/settings.gradle
+          git clone -q https://github.com/nayuki/QR-Code-generator /tmp/qr
+          git -C /tmp/qr checkout -q bcfe1b018cec5f1f91b5705eca5bb4cdd34e9f8d
+          mkdir -p addons/lampen/app/src/main/java/io/nayuki/qrcodegen
+          cp /tmp/qr/java/src/main/java/io/nayuki/qrcodegen/{QrCode,QrSegment,BitBuffer,DataTooLongException}.java addons/lampen/app/src/main/java/io/nayuki/qrcodegen/
+          for f in launcher/app/build.gradle addons/lampen/app/build.gradle; do printf '\nandroid {\n    signingConfigs {\n        debug {\n            storeFile file(System.getenv("HOME") + "/tv.keystore")\n            storePassword "android"\n            keyAlias "androiddebugkey"\n            keyPassword "android"\n        }\n    }\n}\n' >> $f; done
+      - name: Launcher bouwen
+        working-directory: launcher
+        run: |
+          for i in 1 2 3; do chmod +x gradlew && ./gradlew --no-daemon assembleRelease && break; echo "opnieuw proberen"; sleep 15; done
+          test -f app/build/outputs/apk/release/app-release.apk
+      - name: Lampen-apps bouwen
+        working-directory: addons/lampen
+        run: |
+          for i in 1 2 3; do chmod +x gradlew && ./gradlew --no-daemon assembleRelease && break; echo "opnieuw proberen"; sleep 15; done
+          find app/build/outputs/apk -name "*.apk"
+      - name: APK's verzamelen
+        run: |
+          mkdir out
+          cp launcher/app/build/outputs/apk/release/app-release.apk out/launcher.apk
+          for f in lampen wifi; do cp addons/lampen/app/build/outputs/apk/$f/release/app-$f-release.apk out/$f.apk; done
+          ls -la out
+      - name: Handtekening controleren
+        run: |
+          for f in out/*.apk; do
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$f" | grep -i "SHA-256 digest" | grep -q 8744d7d5287901555d33f25c4670353319a6afca14df52fd57ad5cb0dc3ad3b9 || { echo "$f heeft niet de vaste handtekening"; exit 1; }
+            echo "$f: vaste handtekening OK"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alles-v5
+          path: out/
